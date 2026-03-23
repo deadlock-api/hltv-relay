@@ -4,11 +4,8 @@ use crate::error::AppError;
 use crate::models::{StartFrame, SyncData};
 use crate::storage::Storage;
 
-/// Default TTL for all Redis keys (1 hour in seconds).
-const DEFAULT_TTL_SECS: u64 = 3600;
-
-/// Default fragment delay for sync endpoint (matches Go reference and memory backend).
-const DEFAULT_DELAY: i32 = 8;
+/// Default TTL for all Redis keys (2 hours in seconds).
+const DEFAULT_TTL_SECS: u64 = 2 * 60 * 60;
 
 /// Convert a Redis error into an `AppError::StorageError`.
 #[allow(clippy::needless_pass_by_value)] // Used as map_err callback which requires FnOnce(E)
@@ -33,12 +30,16 @@ pub(crate) struct RedisStorage {
 
 impl RedisStorage {
     /// Create a new Redis storage backend by connecting to the given URL.
-    pub(crate) async fn new(redis_url: &str) -> Result<Self, AppError> {
-        Self::with_ttl(redis_url, DEFAULT_TTL_SECS).await
+    pub(crate) async fn new(redis_url: &str, fragment_delay: i32) -> Result<Self, AppError> {
+        Self::with_ttl(redis_url, DEFAULT_TTL_SECS, fragment_delay).await
     }
 
     /// Create a new Redis storage backend with a custom TTL (in seconds).
-    pub(crate) async fn with_ttl(redis_url: &str, ttl: u64) -> Result<Self, AppError> {
+    pub(crate) async fn with_ttl(
+        redis_url: &str,
+        ttl: u64,
+        fragment_delay: i32,
+    ) -> Result<Self, AppError> {
         let client = redis::Client::open(redis_url).map_err(redis_err)?;
         let conn = redis::aio::ConnectionManager::new(client)
             .await
@@ -46,7 +47,7 @@ impl RedisStorage {
         Ok(Self {
             conn,
             ttl,
-            delay: DEFAULT_DELAY,
+            delay: fragment_delay,
         })
     }
 
@@ -300,7 +301,7 @@ mod tests {
         let host = container.get_host().await.unwrap();
         let port = container.get_host_port_ipv4(REDIS_PORT).await.unwrap();
         let url = format!("redis://{host}:{port}");
-        let storage = RedisStorage::new(&url)
+        let storage = RedisStorage::new(&url, 8)
             .await
             .expect("redis connection failed");
         (container, storage)

@@ -38,12 +38,12 @@ async fn main() -> anyhow::Result<()> {
     // Select storage backend based on config and build router
     let app = match config.storage {
         config::StorageBackend::Memory => {
-            let storage = Arc::new(MemoryStorage::new());
+            let storage = Arc::new(MemoryStorage::new(config.fragment_delay));
             router::build_router(storage, auth_config)
         }
         config::StorageBackend::Redis => {
             let storage = Arc::new(
-                RedisStorage::new(&config.redis_url)
+                RedisStorage::new(&config.redis_url, config.fragment_delay)
                     .await
                     .map_err(|e| anyhow::anyhow!("{e}"))?,
             );

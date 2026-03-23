@@ -7,9 +7,6 @@ use crate::error::AppError;
 use crate::models::{Fragment, StartFrame, SyncData};
 use crate::storage::Storage;
 
-/// Default fragment delay for sync endpoint (matches Go reference implementation).
-const DEFAULT_DELAY: i32 = 8;
-
 /// Maximum number of fragments to retain per match to prevent unbounded memory growth.
 /// Keeps ~1200 fragments (~1 hour of data). Fragment 0 and start frames are always retained.
 const MAX_RETAINED_FRAGMENTS: i32 = 1200;
@@ -48,10 +45,10 @@ pub(crate) struct MemoryStorage {
 }
 
 impl MemoryStorage {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(fragment_delay: i32) -> Self {
         Self {
             matches: RwLock::new(HashMap::new()),
-            delay: DEFAULT_DELAY,
+            delay: fragment_delay,
         }
     }
 
@@ -207,7 +204,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_and_get_start() {
-        let storage = MemoryStorage::new();
+        let storage = MemoryStorage::new(8);
         let token = "s12345t6789";
 
         storage.start(token, 0, test_start_frame()).await.unwrap();
@@ -218,14 +215,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_full_requires_match() {
-        let storage = MemoryStorage::new();
+        let storage = MemoryStorage::new(8);
         let result = storage.full("nonexistent", 1, 100, vec![5, 6]).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_full_and_get_full() {
-        let storage = MemoryStorage::new();
+        let storage = MemoryStorage::new(8);
         let token = "s12345t6789";
 
         storage.start(token, 0, test_start_frame()).await.unwrap();
@@ -237,7 +234,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delta_and_get_delta() {
-        let storage = MemoryStorage::new();
+        let storage = MemoryStorage::new(8);
         let token = "s12345t6789";
 
         storage.start(token, 0, test_start_frame()).await.unwrap();
@@ -252,7 +249,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_sync_latest_with_delay() {
-        let storage = MemoryStorage::new();
+        let storage = MemoryStorage::new(8);
         let token = "s12345t6789";
 
         storage.start(token, 0, test_start_frame()).await.unwrap();
@@ -279,7 +276,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_sync_specific_fragment() {
-        let storage = MemoryStorage::new();
+        let storage = MemoryStorage::new(8);
         let token = "s12345t6789";
 
         storage.start(token, 0, test_start_frame()).await.unwrap();
@@ -294,14 +291,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_sync_unknown_token() {
-        let storage = MemoryStorage::new();
+        let storage = MemoryStorage::new(8);
         let result = storage.get_sync("nonexistent", None).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_get_sync_fragment_not_ready() {
-        let storage = MemoryStorage::new();
+        let storage = MemoryStorage::new(8);
         let token = "s12345t6789";
 
         storage.start(token, 0, test_start_frame()).await.unwrap();
@@ -314,7 +311,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fragment_not_found_for_missing() {
-        let storage = MemoryStorage::new();
+        let storage = MemoryStorage::new(8);
         let token = "s12345t6789";
         storage.start(token, 0, test_start_frame()).await.unwrap();
 
@@ -325,7 +322,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_match_not_found() {
-        let storage = MemoryStorage::new();
+        let storage = MemoryStorage::new(8);
 
         assert!(storage.get_start("nope", 0).await.is_err());
         assert!(storage.get_full("nope", 0).await.is_err());
@@ -334,7 +331,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_read_write() {
-        let storage = Arc::new(MemoryStorage::new());
+        let storage = Arc::new(MemoryStorage::new(8));
         let token = "s12345t6789";
 
         // Start the match first
@@ -376,7 +373,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cleanup_old_fragments() {
-        let storage = MemoryStorage::new();
+        let storage = MemoryStorage::new(8);
         let token = "s12345t6789";
 
         storage.start(token, 0, test_start_frame()).await.unwrap();

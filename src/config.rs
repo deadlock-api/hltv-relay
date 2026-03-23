@@ -47,6 +47,10 @@ struct Cli {
     /// Allowed networks in CIDR notation (comma-separated)
     #[arg(long, env = "HLTV_RELAY_ALLOWED_NETWORKS")]
     allowed_networks: Option<String>,
+
+    /// Fragment delay for sync endpoint (number of fragments behind latest)
+    #[arg(long, env = "HLTV_RELAY_FRAGMENT_DELAY")]
+    fragment_delay: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +62,7 @@ pub(crate) struct Config {
     pub(crate) auth_modes: Vec<String>,
     pub(crate) auth_key: Option<String>,
     pub(crate) allowed_networks: Vec<String>,
+    pub(crate) fragment_delay: i32,
 }
 
 impl std::fmt::Display for Config {
@@ -69,6 +74,7 @@ impl std::fmt::Display for Config {
         writeln!(f, "  redis_url: {}", self.redis_url)?;
         writeln!(f, "  auth_modes: {:?}", self.auth_modes)?;
         writeln!(f, "  allowed_networks: {:?}", self.allowed_networks)?;
+        writeln!(f, "  fragment_delay: {}", self.fragment_delay)?;
         Ok(())
     }
 }
@@ -110,6 +116,7 @@ impl Config {
         let auth_key = cli.auth_key;
         let networks_str = cli.allowed_networks.unwrap_or_default();
         let allowed_networks = parse_comma_list(&networks_str);
+        let fragment_delay = cli.fragment_delay.unwrap_or(8);
 
         Ok(Self {
             port,
@@ -119,6 +126,7 @@ impl Config {
             auth_modes,
             auth_key,
             allowed_networks,
+            fragment_delay,
         })
     }
 }

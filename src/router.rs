@@ -85,13 +85,13 @@ mod tests {
     use crate::storage::memory::MemoryStorage;
 
     fn test_app(auth_key: &str) -> Router {
-        let storage = Arc::new(MemoryStorage::new());
+        let storage = Arc::new(MemoryStorage::new(8));
         let auth_config = Arc::new(AuthConfig::new(vec![AuthMode::Key(auth_key.to_owned())]));
         build_router(storage, auth_config)
     }
 
     fn test_app_allow_all() -> Router {
-        let storage = Arc::new(MemoryStorage::new());
+        let storage = Arc::new(MemoryStorage::new(8));
         let auth_config = Arc::new(AuthConfig::new(vec![AuthMode::AllowAll]));
         build_router(storage, auth_config)
     }
