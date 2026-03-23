@@ -71,8 +71,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Install Protocol Buffers compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
@@ -86,6 +84,36 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Cargo Clippy (Allow Warnings)
         run: cargo clippy --all-targets --locked
+
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            arch: amd64
+          - target: aarch64-unknown-linux-gnu
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install cross-compilation tools
+        if: matrix.arch == 'arm64'
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "build-cache-${{ runner.os }}-${{ matrix.target }}-stable"
+      - name: Update Rust toolchain to stable
+        run: |
+          rustup override set stable
+          rustup update stable
+          rustup target add ${{ matrix.target }}
+      - name: Build
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --target ${{ matrix.target }} --locked
+
   deploy:
     name: "Deploy: Build & Push"
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
