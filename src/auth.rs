@@ -180,6 +180,7 @@ mod tests {
                 .into_iter()
                 .map(std::borrow::ToOwned::to_owned)
                 .collect(),
+            fragment_delay: 8,
         }
     }
 

@@ -171,7 +171,3 @@ cargo test
 ```
 
 Docker images are built for `linux/amd64` and `linux/arm64`.
-
-## License
-
-[MIT](LICENSE)
