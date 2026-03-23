@@ -24,8 +24,6 @@ struct Match {
     map_name: String,
     start_frames: HashMap<i32, StartFrame>,
     fragments: HashMap<i32, Fragment>,
-    #[allow(dead_code)]
-    auth_key: Option<String>,
 }
 
 impl Match {
@@ -39,7 +37,6 @@ impl Match {
             map_name: String::new(),
             start_frames: HashMap::new(),
             fragments: HashMap::new(),
-            auth_key: None,
         }
     }
 }
@@ -69,20 +66,6 @@ impl MemoryStorage {
 }
 
 impl Storage for MemoryStorage {
-    async fn auth(&self, token: &str, auth: &str) -> Result<(), AppError> {
-        let matches = self.matches.read().await;
-        if let Some(m) = matches.get(token)
-            && let Some(ref stored_key) = m.auth_key
-        {
-            if stored_key != auth {
-                return Err(AppError::InvalidAuth);
-            }
-            return Ok(());
-        }
-        // No auth stored for this token yet — accept (auth will be set on first ingest)
-        Ok(())
-    }
-
     async fn start(&self, token: &str, fragment: i32, frame: StartFrame) -> Result<(), AppError> {
         let mut matches = self.matches.write().await;
         let m = matches.entry(token.to_owned()).or_insert_with(Match::new);

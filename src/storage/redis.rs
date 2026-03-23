@@ -10,6 +10,20 @@ const DEFAULT_TTL_SECS: u64 = 3600;
 /// Default fragment delay for sync endpoint (matches Go reference and memory backend).
 const DEFAULT_DELAY: i32 = 8;
 
+/// Convert a Redis error into an `AppError::StorageError`.
+#[allow(clippy::needless_pass_by_value)] // Used as map_err callback which requires FnOnce(E)
+fn redis_err(e: redis::RedisError) -> AppError {
+    AppError::StorageError(format!("redis error: {e}"))
+}
+
+/// Parse a `Vec<u8>` as a little-endian i32.
+fn read_i32_le(bytes: Vec<u8>) -> Result<i32, AppError> {
+    let arr: [u8; 4] = bytes
+        .try_into()
+        .map_err(|_| AppError::StorageError("invalid i32 bytes".to_owned()))?;
+    Ok(i32::from_le_bytes(arr))
+}
+
 /// Redis storage backend using a connection manager (auto-reconnecting multiplexed connection).
 pub(crate) struct RedisStorage {
     conn: redis::aio::ConnectionManager,
@@ -25,11 +39,10 @@ impl RedisStorage {
 
     /// Create a new Redis storage backend with a custom TTL (in seconds).
     pub(crate) async fn with_ttl(redis_url: &str, ttl: u64) -> Result<Self, AppError> {
-        let client = redis::Client::open(redis_url)
-            .map_err(|e| AppError::StorageError(format!("redis client error: {e}")))?;
+        let client = redis::Client::open(redis_url).map_err(redis_err)?;
         let conn = redis::aio::ConnectionManager::new(client)
             .await
-            .map_err(|e| AppError::StorageError(format!("redis connection error: {e}")))?;
+            .map_err(redis_err)?;
         Ok(Self {
             conn,
             ttl,
@@ -43,33 +56,42 @@ impl RedisStorage {
         redis::cmd("PING")
             .query_async::<String>(&mut conn)
             .await
-            .map_err(|e| AppError::StorageError(format!("redis ping failed: {e}")))?;
+            .map_err(redis_err)?;
         Ok(())
     }
 
-    /// Set a key with the configured TTL.
-    async fn set_with_ttl(
+    /// Verify a match exists by checking for its metadata key.
+    async fn ensure_match_exists(
         conn: &mut redis::aio::ConnectionManager,
-        key: &str,
-        value: &[u8],
-        ttl: u64,
+        token: &str,
     ) -> Result<(), AppError> {
-        conn.set_ex::<_, _, ()>(key, value, ttl)
-            .await
-            .map_err(|e| AppError::StorageError(format!("redis set error: {e}")))?;
+        let meta_key = format!("{token}:meta");
+        let exists: bool = conn.exists(&meta_key).await.map_err(redis_err)?;
+        if !exists {
+            return Err(AppError::MatchNotFound);
+        }
         Ok(())
     }
 
-    /// Get raw bytes from a key.
-    async fn get_bytes(
-        conn: &mut redis::aio::ConnectionManager,
-        key: &str,
+    /// Get a fragment's raw bytes by suffix (start, full, or delta).
+    /// Returns `MatchNotFound` if the match doesn't exist, `FragmentNotFound` if the key is missing.
+    async fn get_fragment_bytes(
+        &self,
+        token: &str,
+        fragment: i32,
+        suffix: &str,
     ) -> Result<Vec<u8>, AppError> {
-        let val: Option<Vec<u8>> = conn
-            .get(key)
-            .await
-            .map_err(|e| AppError::StorageError(format!("redis get error: {e}")))?;
-        val.ok_or(AppError::FragmentNotFound)
+        let mut conn = self.conn.clone();
+        let key = format!("{token}:{fragment}:{suffix}");
+        let val: Option<Vec<u8>> = conn.get(&key).await.map_err(redis_err)?;
+        // A missing key means either the match or fragment doesn't exist.
+        // Distinguish by checking for metadata only when the key is absent.
+        if let Some(bytes) = val {
+            Ok(bytes)
+        } else {
+            Self::ensure_match_exists(&mut conn, token).await?;
+            Err(AppError::FragmentNotFound)
+        }
     }
 }
 
@@ -78,28 +100,10 @@ impl Storage for RedisStorage {
         self.ping().await
     }
 
-    async fn auth(&self, token: &str, auth: &str) -> Result<(), AppError> {
-        let mut conn = self.conn.clone();
-        let key = format!("{token}:auth");
-        let stored: Option<String> = conn
-            .get(&key)
-            .await
-            .map_err(|e| AppError::StorageError(format!("redis get error: {e}")))?;
-
-        match stored {
-            Some(ref stored_key) if stored_key != auth => Err(AppError::InvalidAuth),
-            _ => Ok(()),
-        }
-    }
-
     async fn start(&self, token: &str, fragment: i32, frame: StartFrame) -> Result<(), AppError> {
         let mut conn = self.conn.clone();
 
-        // Store start frame body
         let body_key = format!("{token}:{fragment}:start");
-        Self::set_with_ttl(&mut conn, &body_key, &frame.body, self.ttl).await?;
-
-        // Store match metadata as JSON
         let meta = serde_json::json!({
             "tps": frame.tps,
             "protocol": frame.protocol,
@@ -109,7 +113,23 @@ impl Storage for RedisStorage {
         let meta_key = format!("{token}:meta");
         let meta_bytes = serde_json::to_vec(&meta)
             .map_err(|e| AppError::StorageError(format!("json serialize error: {e}")))?;
-        Self::set_with_ttl(&mut conn, &meta_key, &meta_bytes, self.ttl).await?;
+
+        redis::pipe()
+            .cmd("SET")
+            .arg(&body_key)
+            .arg(&frame.body)
+            .arg("EX")
+            .arg(self.ttl)
+            .ignore()
+            .cmd("SET")
+            .arg(&meta_key)
+            .arg(&meta_bytes)
+            .arg("EX")
+            .arg(self.ttl)
+            .ignore()
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(redis_err)?;
 
         Ok(())
     }
@@ -122,29 +142,34 @@ impl Storage for RedisStorage {
         body: Vec<u8>,
     ) -> Result<(), AppError> {
         let mut conn = self.conn.clone();
+        Self::ensure_match_exists(&mut conn, token).await?;
 
-        // Check match exists
-        let meta_key = format!("{token}:meta");
-        let exists: bool = conn
-            .exists(&meta_key)
-            .await
-            .map_err(|e| AppError::StorageError(format!("redis exists error: {e}")))?;
-        if !exists {
-            return Err(AppError::MatchNotFound);
-        }
-
-        // Store full snapshot
         let body_key = format!("{token}:{fragment}:full");
-        Self::set_with_ttl(&mut conn, &body_key, &body, self.ttl).await?;
-
-        // Store fragment tick metadata
         let tick_key = format!("{token}:{fragment}:tick");
-        let tick_bytes = tick.to_le_bytes();
-        Self::set_with_ttl(&mut conn, &tick_key, &tick_bytes, self.ttl).await?;
-
-        // Update latest fragment number
         let latest_key = format!("{token}:latest");
-        Self::set_with_ttl(&mut conn, &latest_key, &fragment.to_le_bytes(), self.ttl).await?;
+
+        redis::pipe()
+            .cmd("SET")
+            .arg(&body_key)
+            .arg(&body)
+            .arg("EX")
+            .arg(self.ttl)
+            .ignore()
+            .cmd("SET")
+            .arg(&tick_key)
+            .arg(tick.to_le_bytes().as_slice())
+            .arg("EX")
+            .arg(self.ttl)
+            .ignore()
+            .cmd("SET")
+            .arg(&latest_key)
+            .arg(fragment.to_le_bytes().as_slice())
+            .arg("EX")
+            .arg(self.ttl)
+            .ignore()
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(redis_err)?;
 
         Ok(())
     }
@@ -158,28 +183,35 @@ impl Storage for RedisStorage {
         body: Vec<u8>,
     ) -> Result<(), AppError> {
         let mut conn = self.conn.clone();
+        Self::ensure_match_exists(&mut conn, token).await?;
 
-        // Check match exists
-        let meta_key = format!("{token}:meta");
-        let exists: bool = conn
-            .exists(&meta_key)
-            .await
-            .map_err(|e| AppError::StorageError(format!("redis exists error: {e}")))?;
-        if !exists {
-            return Err(AppError::MatchNotFound);
-        }
-
-        // Store delta
         let body_key = format!("{token}:{fragment}:delta");
-        Self::set_with_ttl(&mut conn, &body_key, &body, self.ttl).await?;
-
-        // Store end_tick and final_fragment metadata
         let end_tick_key = format!("{token}:{fragment}:endtick");
-        Self::set_with_ttl(&mut conn, &end_tick_key, &end_tick.to_le_bytes(), self.ttl).await?;
-
         let final_key = format!("{token}:{fragment}:final");
         let final_byte: u8 = u8::from(is_final);
-        Self::set_with_ttl(&mut conn, &final_key, &[final_byte], self.ttl).await?;
+
+        redis::pipe()
+            .cmd("SET")
+            .arg(&body_key)
+            .arg(&body)
+            .arg("EX")
+            .arg(self.ttl)
+            .ignore()
+            .cmd("SET")
+            .arg(&end_tick_key)
+            .arg(end_tick.to_le_bytes().as_slice())
+            .arg("EX")
+            .arg(self.ttl)
+            .ignore()
+            .cmd("SET")
+            .arg(&final_key)
+            .arg(&[final_byte])
+            .arg("EX")
+            .arg(self.ttl)
+            .ignore()
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(redis_err)?;
 
         Ok(())
     }
@@ -189,10 +221,7 @@ impl Storage for RedisStorage {
 
         // Load match metadata
         let meta_key = format!("{token}:meta");
-        let meta_bytes: Option<Vec<u8>> = conn
-            .get(&meta_key)
-            .await
-            .map_err(|e| AppError::StorageError(format!("redis get error: {e}")))?;
+        let meta_bytes: Option<Vec<u8>> = conn.get(&meta_key).await.map_err(redis_err)?;
         let meta_bytes = meta_bytes.ok_or(AppError::MatchNotFound)?;
         let meta: serde_json::Value = serde_json::from_slice(&meta_bytes)
             .map_err(|e| AppError::StorageError(format!("json deserialize error: {e}")))?;
@@ -200,44 +229,28 @@ impl Storage for RedisStorage {
         let frag_num = if let Some(f) = fragment {
             f
         } else {
-            // Get latest fragment
             let latest_key = format!("{token}:latest");
-            let latest_bytes: Option<Vec<u8>> = conn
-                .get(&latest_key)
-                .await
-                .map_err(|e| AppError::StorageError(format!("redis get error: {e}")))?;
-            let latest_bytes = latest_bytes.ok_or(AppError::FragmentNotFound)?;
-            let latest = i32::from_le_bytes(
-                latest_bytes
-                    .try_into()
-                    .map_err(|_| AppError::StorageError("invalid latest bytes".to_owned()))?,
-            );
+            let latest_bytes: Option<Vec<u8>> = conn.get(&latest_key).await.map_err(redis_err)?;
+            let latest = read_i32_le(latest_bytes.ok_or(AppError::FragmentNotFound)?)?;
             latest - self.delay
         };
 
-        // Load fragment metadata
+        // Load tick and endtick in a single pipeline
         let tick_key = format!("{token}:{frag_num}:tick");
-        let tick_bytes: Option<Vec<u8>> = conn
-            .get(&tick_key)
-            .await
-            .map_err(|e| AppError::StorageError(format!("redis get error: {e}")))?;
-        let tick_bytes = tick_bytes.ok_or(AppError::FragmentNotFound)?;
-        let tick = i32::from_le_bytes(
-            tick_bytes
-                .try_into()
-                .map_err(|_| AppError::StorageError("invalid tick bytes".to_owned()))?,
-        );
-
         let end_tick_key = format!("{token}:{frag_num}:endtick");
-        let end_tick_bytes: Option<Vec<u8>> = conn
-            .get(&end_tick_key)
+
+        let (tick_bytes, end_tick_bytes): (Option<Vec<u8>>, Option<Vec<u8>>) = redis::pipe()
+            .cmd("GET")
+            .arg(&tick_key)
+            .cmd("GET")
+            .arg(&end_tick_key)
+            .query_async(&mut conn)
             .await
-            .map_err(|e| AppError::StorageError(format!("redis get error: {e}")))?;
+            .map_err(redis_err)?;
+
+        let tick = read_i32_le(tick_bytes.ok_or(AppError::FragmentNotFound)?)?;
         let end_tick = match end_tick_bytes {
-            Some(b) => i32::from_le_bytes(
-                b.try_into()
-                    .map_err(|_| AppError::StorageError("invalid endtick bytes".to_owned()))?,
-            ),
+            Some(b) => read_i32_le(b)?,
             None => 0,
         };
 
@@ -263,52 +276,15 @@ impl Storage for RedisStorage {
     }
 
     async fn get_start(&self, token: &str, fragment: i32) -> Result<Vec<u8>, AppError> {
-        let mut conn = self.conn.clone();
-
-        // Check match exists
-        let meta_key = format!("{token}:meta");
-        let exists: bool = conn
-            .exists(&meta_key)
-            .await
-            .map_err(|e| AppError::StorageError(format!("redis exists error: {e}")))?;
-        if !exists {
-            return Err(AppError::MatchNotFound);
-        }
-
-        let key = format!("{token}:{fragment}:start");
-        Self::get_bytes(&mut conn, &key).await
+        self.get_fragment_bytes(token, fragment, "start").await
     }
 
     async fn get_full(&self, token: &str, fragment: i32) -> Result<Vec<u8>, AppError> {
-        let mut conn = self.conn.clone();
-
-        let meta_key = format!("{token}:meta");
-        let exists: bool = conn
-            .exists(&meta_key)
-            .await
-            .map_err(|e| AppError::StorageError(format!("redis exists error: {e}")))?;
-        if !exists {
-            return Err(AppError::MatchNotFound);
-        }
-
-        let key = format!("{token}:{fragment}:full");
-        Self::get_bytes(&mut conn, &key).await
+        self.get_fragment_bytes(token, fragment, "full").await
     }
 
     async fn get_delta(&self, token: &str, fragment: i32) -> Result<Vec<u8>, AppError> {
-        let mut conn = self.conn.clone();
-
-        let meta_key = format!("{token}:meta");
-        let exists: bool = conn
-            .exists(&meta_key)
-            .await
-            .map_err(|e| AppError::StorageError(format!("redis exists error: {e}")))?;
-        if !exists {
-            return Err(AppError::MatchNotFound);
-        }
-
-        let key = format!("{token}:{fragment}:delta");
-        Self::get_bytes(&mut conn, &key).await
+        self.get_fragment_bytes(token, fragment, "delta").await
     }
 }
 

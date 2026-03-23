@@ -13,10 +13,6 @@ pub(crate) trait Storage: Send + Sync + 'static {
         async { Ok(()) }
     }
 
-    /// Validate authentication for a token.
-    #[allow(dead_code)]
-    fn auth(&self, token: &str, auth: &str) -> impl Future<Output = Result<(), AppError>> + Send;
-
     /// Store a start frame for a match.
     fn start(
         &self,

@@ -74,7 +74,6 @@ pub(crate) struct Config {
     pub(crate) storage: StorageBackend,
     pub(crate) redis_url: String,
     pub(crate) auth_modes: Vec<String>,
-    #[allow(dead_code)]
     pub(crate) auth_key: Option<String>,
     pub(crate) allowed_networks: Vec<String>,
 }

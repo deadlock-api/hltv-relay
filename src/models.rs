@@ -1,9 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::error::AppError;
-
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct StartFrame {
     pub(crate) tps: f64,
     pub(crate) protocol: i32,
@@ -12,7 +9,7 @@ pub(crate) struct StartFrame {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code, clippy::struct_field_names)]
+#[allow(clippy::struct_field_names)]
 pub(crate) struct Fragment {
     pub(crate) tick: i32,
     pub(crate) final_fragment: bool,
@@ -22,7 +19,6 @@ pub(crate) struct Fragment {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[allow(dead_code)]
 pub(crate) struct SyncData {
     pub(crate) tick: i32,
     pub(crate) endtick: i32,
@@ -36,35 +32,34 @@ pub(crate) struct SyncData {
     pub(crate) protocol: i32,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
-pub(crate) struct TokenInfo {
-    pub(crate) steam_id: String,
-    pub(crate) timestamp: String,
-}
-
-#[allow(dead_code)]
-pub(crate) fn parse_token(token: &str) -> Result<TokenInfo, AppError> {
-    let rest = token.strip_prefix('s').ok_or(AppError::InvalidAuth)?;
-
-    let t_pos = rest.find('t').ok_or(AppError::InvalidAuth)?;
-
-    let steam_id = &rest[..t_pos];
-    let timestamp = &rest[t_pos + 1..];
-
-    if steam_id.is_empty() || timestamp.is_empty() {
-        return Err(AppError::InvalidAuth);
-    }
-
-    Ok(TokenInfo {
-        steam_id: steam_id.to_string(),
-        timestamp: timestamp.to_string(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::AppError;
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct TokenInfo {
+        steam_id: String,
+        timestamp: String,
+    }
+
+    fn parse_token(token: &str) -> Result<TokenInfo, AppError> {
+        let rest = token.strip_prefix('s').ok_or(AppError::InvalidAuth)?;
+
+        let t_pos = rest.find('t').ok_or(AppError::InvalidAuth)?;
+
+        let steam_id = &rest[..t_pos];
+        let timestamp = &rest[t_pos + 1..];
+
+        if steam_id.is_empty() || timestamp.is_empty() {
+            return Err(AppError::InvalidAuth);
+        }
+
+        Ok(TokenInfo {
+            steam_id: steam_id.to_string(),
+            timestamp: timestamp.to_string(),
+        })
+    }
 
     #[test]
     fn test_sync_data_json_round_trip() {
