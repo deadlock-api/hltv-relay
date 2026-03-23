@@ -1,4 +1,6 @@
+use async_compression::tokio::bufread::{ZstdDecoder, ZstdEncoder};
 use redis::AsyncCommands;
+use tokio::io::{AsyncReadExt, BufReader};
 use tracing::{debug, info};
 
 use crate::error::AppError;
@@ -7,6 +9,28 @@ use crate::storage::Storage;
 
 /// Default TTL for all Redis keys (2 hours in seconds).
 const DEFAULT_TTL_SECS: u64 = 2 * 60 * 60;
+
+/// Compress bytes using zstd.
+async fn compress(data: &[u8]) -> Result<Vec<u8>, AppError> {
+    let mut encoder = ZstdEncoder::new(BufReader::new(data));
+    let mut compressed = Vec::new();
+    encoder
+        .read_to_end(&mut compressed)
+        .await
+        .map_err(|e| AppError::StorageError(format!("zstd compression error: {e}")))?;
+    Ok(compressed)
+}
+
+/// Decompress zstd-compressed bytes.
+async fn decompress(data: &[u8]) -> Result<Vec<u8>, AppError> {
+    let mut decoder = ZstdDecoder::new(BufReader::new(data));
+    let mut decompressed = Vec::new();
+    decoder
+        .read_to_end(&mut decompressed)
+        .await
+        .map_err(|e| AppError::StorageError(format!("zstd decompression error: {e}")))?;
+    Ok(decompressed)
+}
 
 /// Convert a Redis error into an `AppError::StorageError`.
 #[allow(clippy::needless_pass_by_value)] // Used as map_err callback which requires FnOnce(E)
@@ -90,7 +114,7 @@ impl RedisStorage {
         // A missing key means either the match or fragment doesn't exist.
         // Distinguish by checking for metadata only when the key is absent.
         if let Some(bytes) = val {
-            Ok(bytes)
+            decompress(&bytes).await
         } else {
             Self::ensure_match_exists(&mut conn, token).await?;
             Err(AppError::FragmentNotFound)
@@ -117,11 +141,12 @@ impl Storage for RedisStorage {
         let meta_key = format!("{token}:meta");
         let meta_bytes = serde_json::to_vec(&meta)
             .map_err(|e| AppError::StorageError(format!("json serialize error: {e}")))?;
+        let compressed_body = compress(&frame.body).await?;
 
         redis::pipe()
             .cmd("SET")
             .arg(&body_key)
-            .arg(&frame.body)
+            .arg(&compressed_body)
             .arg("EX")
             .arg(self.ttl)
             .ignore()
@@ -151,11 +176,12 @@ impl Storage for RedisStorage {
         let body_key = format!("{token}:{fragment}:full");
         let tick_key = format!("{token}:{fragment}:tick");
         let latest_key = format!("{token}:latest");
+        let compressed_body = compress(&body).await?;
 
         redis::pipe()
             .cmd("SET")
             .arg(&body_key)
-            .arg(&body)
+            .arg(&compressed_body)
             .arg("EX")
             .arg(self.ttl)
             .ignore()
@@ -193,11 +219,12 @@ impl Storage for RedisStorage {
         let end_tick_key = format!("{token}:{fragment}:endtick");
         let final_key = format!("{token}:{fragment}:final");
         let final_byte: u8 = u8::from(is_final);
+        let compressed_body = compress(&body).await?;
 
         redis::pipe()
             .cmd("SET")
             .arg(&body_key)
-            .arg(&body)
+            .arg(&compressed_body)
             .arg("EX")
             .arg(self.ttl)
             .ignore()
