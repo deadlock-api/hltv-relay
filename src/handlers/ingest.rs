@@ -31,7 +31,7 @@ pub(crate) struct FullQuery {
 #[derive(Debug, Deserialize)]
 pub(crate) struct DeltaQuery {
     endtick: i32,
-    #[serde(rename = "final")]
+    #[serde(rename = "final", default)]
     is_final: bool,
 }
 
