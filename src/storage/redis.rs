@@ -295,10 +295,7 @@ mod tests {
     use testcontainers_modules::redis::{REDIS_PORT, Redis};
     use testcontainers_modules::testcontainers::runners::AsyncRunner;
 
-    async fn start_redis() -> (
-        testcontainers_modules::testcontainers::ContainerAsync<Redis>,
-        RedisStorage,
-    ) {
+    async fn start_redis() -> (testcontainers::ContainerAsync<Redis>, RedisStorage) {
         let container = Redis::default().start().await.unwrap();
         let host = container.get_host().await.unwrap();
         let port = container.get_host_port_ipv4(REDIS_PORT).await.unwrap();

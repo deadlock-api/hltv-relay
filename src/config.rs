@@ -1,7 +1,4 @@
-use std::path::PathBuf;
-
 use clap::Parser;
-use serde::Deserialize;
 
 use crate::error::AppError;
 
@@ -50,21 +47,6 @@ struct Cli {
     /// Allowed networks in CIDR notation (comma-separated)
     #[arg(long, env = "HLTV_RELAY_ALLOWED_NETWORKS")]
     allowed_networks: Option<String>,
-
-    /// Path to TOML config file
-    #[arg(long, env = "HLTV_RELAY_CONFIG")]
-    config: Option<PathBuf>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct FileConfig {
-    port: Option<u16>,
-    host: Option<String>,
-    storage: Option<String>,
-    redis_url: Option<String>,
-    auth_mode: Option<String>,
-    auth_key: Option<String>,
-    allowed_networks: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,47 +92,23 @@ fn parse_comma_list(value: &str) -> Vec<String> {
 }
 
 impl Config {
-    /// Load configuration with precedence: CLI args > env vars > config file > defaults.
+    /// Load configuration with precedence: CLI args > env vars > defaults.
     ///
-    /// Clap handles CLI > env automatically. We layer the TOML file underneath.
+    /// Clap handles CLI > env automatically.
     pub(crate) fn load() -> Result<Self, AppError> {
         let cli = Cli::parse();
 
-        // Load file config if --config is provided
-        let file = match &cli.config {
-            Some(path) => {
-                let contents = std::fs::read_to_string(path).map_err(|e| {
-                    AppError::ConfigError(format!("failed to read config file: {e}"))
-                })?;
-                toml::from_str::<FileConfig>(&contents).map_err(|e| {
-                    AppError::ConfigError(format!("failed to parse config file: {e}"))
-                })?
-            }
-            None => FileConfig::default(),
-        };
-
-        // Merge: CLI/env (from clap) takes precedence over file config, then defaults
-        let port = cli.port.or(file.port).unwrap_or(3000);
-        let host = cli
-            .host
-            .or(file.host)
-            .unwrap_or_else(|| "0.0.0.0".to_owned());
-        let storage_str = cli
-            .storage
-            .or(file.storage)
-            .unwrap_or_else(|| "memory".to_owned());
+        let port = cli.port.unwrap_or(3000);
+        let host = cli.host.unwrap_or_else(|| "0.0.0.0".to_owned());
+        let storage_str = cli.storage.unwrap_or_else(|| "memory".to_owned());
         let storage = parse_storage(&storage_str)?;
         let redis_url = cli
             .redis_url
-            .or(file.redis_url)
             .unwrap_or_else(|| "redis://127.0.0.1:6379".to_owned());
-        let auth_mode_str = cli.auth_mode.or(file.auth_mode).unwrap_or_default();
+        let auth_mode_str = cli.auth_mode.unwrap_or_default();
         let auth_modes = parse_comma_list(&auth_mode_str);
-        let auth_key = cli.auth_key.or(file.auth_key);
-        let networks_str = cli
-            .allowed_networks
-            .or(file.allowed_networks)
-            .unwrap_or_default();
+        let auth_key = cli.auth_key;
+        let networks_str = cli.allowed_networks.unwrap_or_default();
         let allowed_networks = parse_comma_list(&networks_str);
 
         Ok(Self {
