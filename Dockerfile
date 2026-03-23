@@ -13,4 +13,6 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /app/target/release/hltv-relay /usr/local/bin/hltv-relay
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
 ENTRYPOINT ["/usr/local/bin/hltv-relay"]
