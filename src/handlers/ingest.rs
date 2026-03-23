@@ -4,6 +4,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, Query};
 use axum::response::IntoResponse;
 use serde::Deserialize;
+use tracing::{debug, instrument};
 
 use super::MatchFragmentPath;
 use crate::error::AppError;
@@ -11,7 +12,7 @@ use crate::models::StartFrame;
 use crate::storage::Storage;
 
 /// Query parameters for `POST /:token/:fragment_number/start`.
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub(crate) struct StartQuery {
     #[allow(dead_code)]
     tick: i32,
@@ -21,13 +22,13 @@ pub(crate) struct StartQuery {
 }
 
 /// Query parameters for `POST /:token/:fragment_number/full`.
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub(crate) struct FullQuery {
     tick: i32,
 }
 
 /// Query parameters for `POST /:token/:fragment_number/delta`.
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub(crate) struct DeltaQuery {
     endtick: i32,
     #[serde(rename = "final")]
@@ -37,6 +38,7 @@ pub(crate) struct DeltaQuery {
 /// POST `/:token/:fragment_number/start?tick=X&tps=Y&map=Z&protocol=P`
 ///
 /// Stores the start frame for a match broadcast.
+#[instrument(skip(storage, body), fields(token = %path.token, fragment = path.fragment_number, map = %query.map))]
 pub(crate) async fn post_start<S: Storage>(
     Path(path): Path<MatchFragmentPath>,
     Query(query): Query<StartQuery>,
@@ -54,12 +56,14 @@ pub(crate) async fn post_start<S: Storage>(
         .start(&path.token, path.fragment_number, frame)
         .await?;
 
+    debug!("match started");
     Ok(())
 }
 
 /// POST `/:token/:fragment_number/full?tick=X`
 ///
 /// Stores a full snapshot for a fragment.
+#[instrument(skip(storage, body), fields(token = %path.token, fragment = path.fragment_number, tick = query.tick))]
 pub(crate) async fn post_full<S: Storage>(
     Path(path): Path<MatchFragmentPath>,
     Query(query): Query<FullQuery>,
@@ -70,12 +74,14 @@ pub(crate) async fn post_full<S: Storage>(
         .full(&path.token, path.fragment_number, query.tick, body.to_vec())
         .await?;
 
+    debug!("full frame stored");
     Ok(())
 }
 
 /// POST `/:token/:fragment_number/delta?endtick=X&final=true|false`
 ///
 /// Stores a delta for a fragment.
+#[instrument(skip(storage, body), fields(token = %path.token, fragment = path.fragment_number, endtick = query.endtick, is_final = query.is_final))]
 pub(crate) async fn post_delta<S: Storage>(
     Path(path): Path<MatchFragmentPath>,
     Query(query): Query<DeltaQuery>,
@@ -92,5 +98,6 @@ pub(crate) async fn post_delta<S: Storage>(
         )
         .await?;
 
+    debug!("delta frame stored");
     Ok(())
 }

@@ -7,6 +7,8 @@ use axum::middleware;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use tower_http::cors::CorsLayer;
+use tower_http::trace::TraceLayer;
+use tracing::Span;
 
 use crate::auth::{AuthConfig, auth_middleware};
 use crate::handlers::{broadcast, ingest};
@@ -58,6 +60,25 @@ pub(crate) fn build_router<S: Storage>(storage: Arc<S>, auth_config: Arc<AuthCon
         .merge(ingest_routes)
         .merge(health)
         .with_state(storage)
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|req: &axum::http::Request<_>| {
+                    tracing::info_span!(
+                        "http_request",
+                        method = %req.method(),
+                        uri = %req.uri(),
+                    )
+                })
+                .on_response(
+                    |resp: &axum::http::Response<_>, latency: std::time::Duration, _span: &Span| {
+                        tracing::info!(
+                            status = resp.status().as_u16(),
+                            latency_ms = latency.as_millis(),
+                            "response"
+                        );
+                    },
+                ),
+        )
         .layer(CorsLayer::permissive())
 }
 

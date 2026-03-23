@@ -1,5 +1,6 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use tracing::{error, warn};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum AppError {
@@ -26,6 +27,17 @@ impl IntoResponse for AppError {
             Self::FragmentNotFound | Self::MatchNotFound => StatusCode::NOT_FOUND,
             Self::StorageError(_) | Self::ConfigError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
+
+        match &self {
+            Self::StorageError(_) | Self::ConfigError(_) => {
+                error!(status = status.as_u16(), error = %self, "internal error");
+            }
+            Self::InvalidAuth => {
+                warn!(status = status.as_u16(), "unauthorized request");
+            }
+            _ => {}
+        }
+
         (status, self.to_string()).into_response()
     }
 }

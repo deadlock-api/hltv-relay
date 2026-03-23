@@ -7,6 +7,8 @@ use axum::middleware::Next;
 use axum::response::Response;
 use ipnetwork::IpNetwork;
 
+use tracing::warn;
+
 use crate::config::Config;
 use crate::error::AppError;
 
@@ -152,7 +154,10 @@ pub(crate) async fn auth_middleware(
 
     let client_ip = extract_client_ip(&req);
 
-    auth_config.check(auth_header, client_ip)?;
+    if let Err(e) = auth_config.check(auth_header, client_ip) {
+        warn!(client_ip = ?client_ip, "auth rejected");
+        return Err(e);
+    }
 
     Ok(next.run(req).await)
 }

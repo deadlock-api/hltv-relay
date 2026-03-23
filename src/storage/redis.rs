@@ -1,4 +1,5 @@
 use redis::AsyncCommands;
+use tracing::{debug, info};
 
 use crate::error::AppError;
 use crate::models::{StartFrame, SyncData};
@@ -44,6 +45,7 @@ impl RedisStorage {
         let conn = redis::aio::ConnectionManager::new(client)
             .await
             .map_err(redis_err)?;
+        info!("connected to Redis");
         Ok(Self {
             conn,
             ttl,
@@ -102,6 +104,7 @@ impl Storage for RedisStorage {
     }
 
     async fn start(&self, token: &str, fragment: i32, frame: StartFrame) -> Result<(), AppError> {
+        debug!(token, fragment, map = %frame.map_name, "redis: storing start frame");
         let mut conn = self.conn.clone();
 
         let body_key = format!("{token}:{fragment}:start");
