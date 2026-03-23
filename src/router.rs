@@ -72,6 +72,7 @@ async fn health_check<S: Storage>(
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};

@@ -313,15 +313,29 @@ impl Storage for RedisStorage {
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 mod tests {
     use super::*;
+    use testcontainers_modules::redis::{REDIS_PORT, Redis};
+    use testcontainers_modules::testcontainers::runners::AsyncRunner;
 
-    #[tokio::test]
-    #[ignore]
-    async fn test_redis_start_and_get_start() {
-        let storage = RedisStorage::new("redis://127.0.0.1:6379")
+    async fn start_redis() -> (
+        testcontainers_modules::testcontainers::ContainerAsync<Redis>,
+        RedisStorage,
+    ) {
+        let container = Redis::default().start().await.unwrap();
+        let host = container.get_host().await.unwrap();
+        let port = container.get_host_port_ipv4(REDIS_PORT).await.unwrap();
+        let url = format!("redis://{host}:{port}");
+        let storage = RedisStorage::new(&url)
             .await
             .expect("redis connection failed");
+        (container, storage)
+    }
+
+    #[tokio::test]
+    async fn test_redis_start_and_get_start() {
+        let (_container, storage) = start_redis().await;
         let token = "s12345t6789_redis_test_start";
 
         storage
@@ -343,11 +357,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_redis_full_requires_match() {
-        let storage = RedisStorage::new("redis://127.0.0.1:6379")
-            .await
-            .expect("redis connection failed");
+        let (_container, storage) = start_redis().await;
         let result = storage
             .full("nonexistent_redis_test", 1, 100, vec![5, 6])
             .await;
@@ -355,11 +366,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_redis_full_and_get_full() {
-        let storage = RedisStorage::new("redis://127.0.0.1:6379")
-            .await
-            .expect("redis connection failed");
+        let (_container, storage) = start_redis().await;
         let token = "s12345t6789_redis_test_full";
 
         storage
@@ -386,11 +394,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_redis_delta_and_get_delta() {
-        let storage = RedisStorage::new("redis://127.0.0.1:6379")
-            .await
-            .expect("redis connection failed");
+        let (_container, storage) = start_redis().await;
         let token = "s12345t6789_redis_test_delta";
 
         storage
@@ -417,11 +422,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_redis_get_sync() {
-        let storage = RedisStorage::new("redis://127.0.0.1:6379")
-            .await
-            .expect("redis connection failed");
+        let (_container, storage) = start_redis().await;
         let token = "s12345t6789_redis_test_sync";
 
         storage
@@ -462,11 +464,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_redis_ping() {
-        let storage = RedisStorage::new("redis://127.0.0.1:6379")
-            .await
-            .expect("redis connection failed");
+        let (_container, storage) = start_redis().await;
         storage.ping().await.expect("ping failed");
     }
 }

@@ -207,6 +207,7 @@ impl Storage for MemoryStorage {
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 mod tests {
     use std::sync::Arc;
 
