@@ -1,4 +1,4 @@
-FROM rust:1.94-slim-trixie AS builder
+FROM rust:1.95-slim-trixie AS builder
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates gcc libssl-dev pkg-config cmake build-essential curl
 WORKDIR /app
